@@ -1,0 +1,17 @@
+[package]
+name = "crypto_notification_service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.32", features = ["full", "time"] }
+reqwest = { version = "0.12.9", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+dotenv = "0.15"
+async-trait = "0.1"
+hmac = "0.12"
+hex = "0.4"
+sha2 = "0.10"
+tokio-cron-scheduler = "0.9"
