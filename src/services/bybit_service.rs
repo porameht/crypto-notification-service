@@ -4,10 +4,13 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
+use reqwest::Client;
 
 #[async_trait]
 pub trait BalanceService {
     async fn get_balance(&self) -> Result<f64, ServiceError>;
+    async fn get_positions(&self, limit: u32) -> Result<Vec<Value>, ServiceError>;
+    async fn get_closed_pnl(&self, limit: u32) -> Result<Vec<Value>, ServiceError>;
 }
 
 #[derive(Clone)]
@@ -15,6 +18,8 @@ pub struct BybitService {
     api_key: String,
     api_secret: String,
     account_type: String,
+    client: Client,
+    base_url: String,
 }
 
 impl BybitService {
@@ -23,6 +28,8 @@ impl BybitService {
             api_key,
             api_secret,
             account_type,
+            client: Client::new(),
+            base_url: "https://api.bybit.com/v5".to_string(),
         }
     }
 
@@ -33,25 +40,18 @@ impl BybitService {
         mac.update(str_to_sign.as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
-}
 
-#[async_trait]
-impl BalanceService for BybitService {
-    async fn get_balance(&self) -> Result<f64, ServiceError> {
+    // Common HTTP request handler
+    async fn make_request(&self, endpoint: &str, params: &str) -> Result<Value, ServiceError> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)?
             .as_millis()
             .to_string();
         let recv_window = "20000";
-        let params = format!("accountType={}", self.account_type);
-        let signature = self.generate_signature(&timestamp, recv_window, &params);
+        let signature = self.generate_signature(&timestamp, recv_window, params);
+        let url = format!("{}/{}?{}", self.base_url, endpoint, params);
 
-        let client = reqwest::Client::new();
-        let url = format!("https://api.bybit.com/v5/account/wallet-balance?{}", params);
-        
-        println!("Making request to URL: {}", url); // Debug log
-        
-        let response = client
+        let response = self.client
             .get(&url)
             .header("X-BAPI-API-KEY", &self.api_key)
             .header("X-BAPI-TIMESTAMP", &timestamp)
@@ -60,13 +60,9 @@ impl BalanceService for BybitService {
             .send()
             .await?;
 
-        // Store status for error checking
         let status = response.status();
-        
-        // Get response text once and reuse it
         let response_text = response.text().await?;
-        
-        // Check if the response status is successful
+
         if !status.is_success() {
             return Err(ServiceError::ApiError(format!(
                 "API returned error status: {}. Body: {}",
@@ -78,7 +74,7 @@ impl BalanceService for BybitService {
         let response_json: Value = serde_json::from_str(&response_text)
             .map_err(|e| ServiceError::ParseError(format!("Failed to parse JSON: {}. Response: {}", e, response_text)))?;
 
-        // Check if the API returned an error
+        // Check API error codes
         if let Some(ret_code) = response_json["retCode"].as_i64() {
             if ret_code != 0 {
                 let ret_msg = response_json["retMsg"].as_str().unwrap_or("Unknown error");
@@ -89,10 +85,25 @@ impl BalanceService for BybitService {
             }
         }
 
-        // Try to get the balance with better error handling
-        let balance = response_json["result"]["list"]
+        Ok(response_json)
+    }
+
+    // Helper to extract array from response
+    fn extract_list(&self, response: Value) -> Result<Vec<Value>, ServiceError> {
+        response["result"]["list"]
             .as_array()
-            .ok_or_else(|| ServiceError::ParseError("'list' not found or not an array".to_string()))?
+            .ok_or_else(|| ServiceError::ParseError("'list' not found or not an array".to_string()))
+            .map(|arr| arr.to_vec())
+    }
+}
+
+#[async_trait]
+impl BalanceService for BybitService {
+    async fn get_balance(&self) -> Result<f64, ServiceError> {
+        let params = format!("accountType={}", self.account_type);
+        let response = self.make_request("account/wallet-balance", &params).await?;
+        
+        let balance = self.extract_list(response)?
             .first()
             .ok_or_else(|| ServiceError::ParseError("'list' is empty".to_string()))?
             ["totalEquity"]
@@ -101,5 +112,17 @@ impl BalanceService for BybitService {
             .parse::<f64>()?;
 
         Ok(balance)
+    }
+
+    async fn get_positions(&self, limit: u32) -> Result<Vec<Value>, ServiceError> {
+        let params = format!("category=linear&settleCoin=USDT&limit={}", limit);
+        let response = self.make_request("position/list", &params).await?;
+        self.extract_list(response)
+    }
+
+    async fn get_closed_pnl(&self, limit: u32) -> Result<Vec<Value>, ServiceError> {
+        let params = format!("category=linear&limit={}", limit);
+        let response = self.make_request("position/closed-pnl", &params).await?;
+        self.extract_list(response)
     }
 }

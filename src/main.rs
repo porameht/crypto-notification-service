@@ -8,6 +8,7 @@ use services::bybit_service::{BalanceService, BybitService};
 use services::notification_service::{NotificationService, TelegramService};
 use tokio_cron_scheduler::{Job, JobScheduler};
 use std::time::Duration;
+use chrono::Local;
 
 #[tokio::main]
 async fn main() -> Result<(), ServiceError> {
@@ -16,7 +17,7 @@ async fn main() -> Result<(), ServiceError> {
     let bybit_service = BybitService::new(
         config.bybit_api_key,
         config.bybit_api_secret,
-        config.account_type,
+        config.account_type.clone(),
     );
     
     let telegram_service = TelegramService::new(
@@ -35,23 +36,63 @@ async fn main() -> Result<(), ServiceError> {
         move |_uuid, _l| {
             let bybit_svc = bybit_service.clone();
             let telegram_svc = telegram_service.clone();
+            let account_type = config.account_type.clone();
             
             Box::pin(async move {
-                println!("Getting balance...");
-                match bybit_svc.get_balance().await {
-                    Ok(balance) => {
-                        let message = format!(
-                            "💰 Current Balance Update 💰\nTotal Balance: ${:.2} USD",
-                            balance
-                        );
-                        
-                        if let Err(e) = telegram_svc.send_notification(&message).await {
-                            eprintln!("Error sending notification: {}", e);
-                        }
-                    }
+                let balance = match bybit_svc.get_balance().await {
+                    Ok(b) => format!("{:.2}", b),
                     Err(e) => {
                         eprintln!("Error getting balance: {}", e);
+                        "Error".to_string()
                     }
+                };
+
+                let positions = match bybit_svc.get_positions(10).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Error getting positions: {}", e);
+                        vec![]
+                    }
+                };
+
+                let closed_pnl = match bybit_svc.get_closed_pnl(100).await {
+                    Ok(pnl) => pnl,
+                    Err(e) => {
+                        eprintln!("Error getting closed PnL: {}", e);
+                        vec![]
+                    }
+                };
+
+                // Calculate total PnL from closed positions
+                let last_pnl: f64 = closed_pnl.iter()
+                    .filter_map(|p| p["closedPnl"].as_str())
+                    .filter_map(|s| s.parse::<f64>().ok())
+                    .sum();
+
+                // Calculate current PnL from open positions
+                let current_pnl: f64 = positions.iter()
+                    .filter_map(|p| p["unrealisedPnl"].as_str())
+                    .filter_map(|s| s.parse::<f64>().ok())
+                    .sum();
+
+                let message = format!(
+                    "<b>✨ Account Status ({}) ✨</b>\n\
+                    <b>💰 Balance:</b> <code>{} USDT</code>\n\
+                    <b>⏱️ Timeframe:</b> <code>1m</code>\n\
+                    <b>📂 Open Positions:</b> <code>{}</code>\n\
+                    <b>💰 Last 100 P&L:</b> <code>{:.2} USDT</code>\n\
+                    <b>💹 Current P&L:</b> <code>{:.2} USDT</code>\n\n\
+                    <i>🔸 Generated at: <code>{}</code></i>",
+                    account_type,
+                    balance,
+                    positions.len(),
+                    last_pnl,
+                    current_pnl,
+                    Local::now().format("%Y-%m-%d %H:%M:%S")
+                );
+                
+                if let Err(e) = telegram_svc.send_notification(&message).await {
+                    eprintln!("Error sending notification: {}", e);
                 }
             })
         }
