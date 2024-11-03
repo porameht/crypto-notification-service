@@ -6,7 +6,20 @@ use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 use reqwest::Client;
+use crate::constants::api::{
+    BYBIT_API_KEY_HEADER,
+    BYBIT_TIMESTAMP_HEADER,
+    BYBIT_RECV_WINDOW_HEADER,
+    BYBIT_SIGN_HEADER,
+    BYBIT_RECV_WINDOW,
+    BYBIT_BASE_URL,
+};
 
+#[derive(Debug)]
+pub enum ApiStatus {
+    Success,
+    Error(i64, String),
+}
 
 #[derive(Clone)]
 pub struct BybitApiClient {
@@ -22,7 +35,7 @@ impl BybitApiClient {
             api_key,
             api_secret,
             client: Client::new(),
-            base_url: "https://api.bybit.com/v5".to_string(),
+            base_url: BYBIT_BASE_URL.to_string(),
         }
     }
 
@@ -33,6 +46,19 @@ impl BybitApiClient {
         mac.update(str_to_sign.as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
+
+    fn check_response_status(&self, response_json: &Value) -> ApiStatus {
+        if let Some(ret_code) = response_json["retCode"].as_i64() {
+            if ret_code != 0 {
+                let ret_msg = response_json["retMsg"].as_str().unwrap_or("Unknown error").to_string();
+                ApiStatus::Error(ret_code, ret_msg)
+            } else {
+                ApiStatus::Success
+            }
+        } else {
+            ApiStatus::Error(-1, "Missing return code".to_string())
+        }
+    }
 }
 
 #[async_trait]
@@ -42,16 +68,15 @@ impl ApiClient for BybitApiClient {
             .duration_since(UNIX_EPOCH)?
             .as_millis()
             .to_string();
-        let recv_window = "20000";
-        let signature = self.generate_signature(&timestamp, recv_window, params);
+        let signature = self.generate_signature(&timestamp, BYBIT_RECV_WINDOW, params);
         let url = format!("{}/{}?{}", self.base_url, endpoint, params);
 
         let response = self.client
             .get(&url)
-            .header("X-BAPI-API-KEY", &self.api_key)
-            .header("X-BAPI-TIMESTAMP", &timestamp)
-            .header("X-BAPI-RECV-WINDOW", recv_window)
-            .header("X-BAPI-SIGN", signature)
+            .header(BYBIT_API_KEY_HEADER, &self.api_key)
+            .header(BYBIT_TIMESTAMP_HEADER, &timestamp)
+            .header(BYBIT_RECV_WINDOW_HEADER, BYBIT_RECV_WINDOW)
+            .header(BYBIT_SIGN_HEADER, signature)
             .send()
             .await?;
 
@@ -69,17 +94,12 @@ impl ApiClient for BybitApiClient {
         let response_json: Value = serde_json::from_str(&response_text)
             .map_err(|e| ServiceError::ParseError(format!("Failed to parse JSON: {}. Response: {}", e, response_text)))?;
 
-        // Check API error codes
-        if let Some(ret_code) = response_json["retCode"].as_i64() {
-            if ret_code != 0 {
-                let ret_msg = response_json["retMsg"].as_str().unwrap_or("Unknown error");
-                return Err(ServiceError::ApiError(format!(
-                    "API returned error code {}: {}",
-                    ret_code, ret_msg
-                )));
-            }
+        match self.check_response_status(&response_json) {
+            ApiStatus::Success => Ok(response_json),
+            ApiStatus::Error(code, msg) => Err(ServiceError::ApiError(format!(
+                "API returned error code {}: {}", 
+                code, msg
+            )))
         }
-
-        Ok(response_json)
     }
-} 
+}

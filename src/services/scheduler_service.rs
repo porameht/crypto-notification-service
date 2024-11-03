@@ -4,7 +4,6 @@ use crate::services::bybit_service::{BybitService, BybitServiceImpl};
 use crate::services::telegram_service::{TelegramService, TelegramServiceImpl};
 use tokio_cron_scheduler::{Job, JobScheduler};
 use std::time::Duration;
-use chrono::Local;
 use std::sync::Arc;
 
 pub struct SchedulerService {
@@ -82,21 +81,18 @@ impl SchedulerService {
                         .filter_map(|s| s.parse::<f64>().ok())
                         .sum();
 
-                    let message = format!(
-                        "<b>✨ Account Status ({}) ✨</b>\n\
-                        <b>💰 Balance:</b> <code>{} USDT</code>\n\
-                        <b>⏱️ Timeframe:</b> <code>1m</code>\n\
-                        <b>📂 Open Positions:</b> <code>{}</code>\n\
-                        <b>💰 Last 100 P&L:</b> <code>{:.2} USDT</code>\n\
-                        <b>💹 Current P&L:</b> <code>{:.2} USDT</code>\n\n\
-                        <i>🔸 Generated at: <code>{}</code></i>",
-                        account_type,
-                        balance,
-                        positions.len(),
-                        last_pnl,
-                        current_pnl,
-                        Local::now().format("%Y-%m-%d %H:%M:%S")
-                    );
+                        let message = format!(
+                            "<b>✨ Account Status ({}) ✨</b>\n\
+                            <b>💰 Balance:</b> <code>{} USDT</code>\n\
+                            <b>📂 Open Positions:</b> <code>{}</code>\n\
+                            <b>💰 Last 100 P&L:</b> <code>{:.2} USDT</code>\n\
+                            <b>💹 Current P&L:</b> <code>{:.2} USDT</code>\n\n",
+                            account_type,
+                            balance,
+                            positions.len(),
+                            last_pnl,
+                            current_pnl
+                        );
                     
                     if let Err(e) = telegram_svc.send_notification(&message).await {
                         eprintln!("Error sending notification: {}", e);

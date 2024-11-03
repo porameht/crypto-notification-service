@@ -3,6 +3,11 @@ use crate::error::ServiceError;
 use async_trait::async_trait;
 use serde_json::Value;
 use reqwest::Client;
+use crate::constants::api::{
+    TELEGRAM_BASE_URL,
+    CONTENT_TYPE_HEADER,
+    CONTENT_TYPE_JSON,
+};
 
 #[derive(Clone)]
 pub struct TelegramApiClient {
@@ -16,7 +21,7 @@ impl TelegramApiClient {
         Self {
             bot_token,
             client: Client::new(),
-            base_url: "https://api.telegram.org".to_string(),
+            base_url: TELEGRAM_BASE_URL.to_string(),
         }
     }
 
@@ -32,7 +37,7 @@ impl ApiClient for TelegramApiClient {
 
         let response = self.client
             .post(&url)
-            .header("Content-Type", "application/json")
+            .header(CONTENT_TYPE_HEADER, CONTENT_TYPE_JSON)
             .body(params.to_string())
             .send()
             .await?;
